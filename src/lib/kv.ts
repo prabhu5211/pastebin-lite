@@ -9,6 +9,87 @@ interface KVStore {
   ping(): Promise<void>;
 }
 
+// Redis store for production
+class RedisKV implements KVStore {
+  private client: any;
+  private connected: boolean = false;
+
+  constructor() {
+    this.initClient();
+  }
+
+  private async initClient() {
+    if (this.connected) return;
+    
+    try {
+      const { createClient } = await import('redis');
+      this.client = createClient({
+        url: process.env.REDIS_URL
+      });
+      
+      this.client.on('error', (err: any) => console.log('[RedisKV] Error:', err));
+      await this.client.connect();
+      this.connected = true;
+      console.log('[RedisKV] Connected to Redis');
+    } catch (error) {
+      console.log('[RedisKV] Connection failed:', error);
+      throw error;
+    }
+  }
+
+  async get<T>(key: string): Promise<T | null> {
+    await this.initClient();
+    try {
+      const value = await this.client.get(key);
+      const result = value ? JSON.parse(value) : null;
+      console.log(`[RedisKV] GET ${key}:`, result ? 'found' : 'not found');
+      return result;
+    } catch (error) {
+      console.log(`[RedisKV] GET ${key} error:`, error);
+      return null;
+    }
+  }
+
+  async set(key: string, value: any): Promise<void> {
+    await this.initClient();
+    try {
+      await this.client.set(key, JSON.stringify(value));
+      console.log(`[RedisKV] SET ${key}:`, 'stored');
+    } catch (error) {
+      console.log(`[RedisKV] SET ${key} error:`, error);
+    }
+  }
+
+  async del(key: string): Promise<void> {
+    await this.initClient();
+    try {
+      const result = await this.client.del(key);
+      console.log(`[RedisKV] DEL ${key}:`, result > 0 ? 'deleted' : 'not found');
+    } catch (error) {
+      console.log(`[RedisKV] DEL ${key} error:`, error);
+    }
+  }
+
+  async ping(): Promise<void> {
+    await this.initClient();
+    try {
+      await this.client.ping();
+      console.log('[RedisKV] PING: OK');
+    } catch (error) {
+      console.log('[RedisKV] PING error:', error);
+      throw error;
+    }
+  }
+}
+
+// Simple KV abstraction that works locally and in production
+interface KVStore {
+  get<T>(key: string): Promise<T | null>;
+  set(key: string, value: any): Promise<void>;
+  del(key: string): Promise<void>;
+  ping(): Promise<void>;
+}
+
 // File-based store for local development
 class FileKV implements KVStore {
   private storePath: string;
@@ -91,6 +172,8 @@ class VercelKV implements KVStore {
 }
 
 // Export the appropriate KV instance
-export const kv: KVStore = process.env.KV_REST_API_URL 
-  ? new VercelKV()
-  : new FileKV();
+export const kv: KVStore = process.env.REDIS_URL 
+  ? new RedisKV()
+  : process.env.KV_REST_API_URL 
+    ? new VercelKV()
+    : new FileKV();
